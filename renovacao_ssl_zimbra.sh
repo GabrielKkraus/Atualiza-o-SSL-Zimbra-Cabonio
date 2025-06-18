@@ -9,8 +9,8 @@ echo "===== Início do processo: $(date) ====="
 certs_dom=$(hostname -f 2>/dev/null)
 [ -z "$certs_dom" ] && certs_dom=$(hostname)
 cert_path="/root/.acme.sh/$certs_dom"
-zerossl="yes"
-letsencrypt="no"
+zerossl="no"
+letsencrypt="yes"
 email="infra@serverdo.in"
 
 # ========== OBTÉM IP PÚBLICO ==========
@@ -56,8 +56,14 @@ killall nginx
 echo "Parando o Zimbra..."
 su - zimbra -c "zmcontrol stop"
 
+# ========== AJUSTANDO /etc/resolv.conf ==========
+echo "nameserver 8.8.8.8
+nameserver 8.8.4.4
+nameserver 127.0.0.1" > /etc/resolv.conf
+echo "[INFO] /etc/resolv.conf ajustado"
+
 # ========== INSTALAÇÃO DO ACME.SH ==========
-apt -y install socat dnsutils
+apt -y install socat dnsutils curl wget
 
 if [ ! -d "/root/.acme.sh" ]; then
     echo "Instalando acme.sh..."
@@ -87,17 +93,9 @@ if [ "$zerossl" = "yes" ]; then
 fi
 
 if [ "$letsencrypt" = "yes" ]; then
-    ./acme.sh --set-default-ca --server letsencrypt_test
-    ./acme.sh --issue --standalone --preferred-chain "ISRG Root X1" --keylength 2048 $dom_list || {
-        echo "[ERRO] Falha na emissão com Let's Encrypt (teste)"
-        exit 1
-    }
-
-    [ -d "$cert_path" ] && rm -rf "$cert_path"
-
     ./acme.sh --set-default-ca --server letsencrypt
     ./acme.sh --issue --standalone --preferred-chain "ISRG Root X1" --keylength 2048 $dom_list || {
-        echo "[ERRO] Falha na emissão com Let's Encrypt (produção)"
+        echo "[ERRO] Falha na emissão com Let's Encrypt"
         exit 1
     }
 fi
@@ -112,6 +110,8 @@ if [ "$letsencrypt" = "yes" ]; then
     rm -rf "/tmp/$tmp_path.$certs_dom"/*
     cp * "/tmp/$tmp_path.$certs_dom"
     cd "/tmp/$tmp_path.$certs_dom" || exit 1
+
+    # Corrigido: baixar CA correta do Let's Encrypt
     wget --no-check-certificate -O ISRG-X1.pem https://letsencrypt.org/certs/isrgrootx1.pem
     cat fullchain.cer ISRG-X1.pem > zimbra_ca.pem
 fi
@@ -122,8 +122,9 @@ if [ "$zerossl" = "yes" ]; then
     rm -rf "/tmp/$tmp_path.$certs_dom"/*
     cp * "/tmp/$tmp_path.$certs_dom"
     cd "/tmp/$tmp_path.$certs_dom" || exit 1
-    wget --no-check-certificate http://www.tbs-x509.com/USERTrustRSACertificationAuthority.crt
-    cat USERTrustRSACertificationAuthority.crt fullchain.cer > zimbra_ca.pem
+
+    wget --no-check-certificate -O USERTrust.crt http://www.tbs-x509.com/USERTrustRSACertificationAuthority.crt
+    cat fullchain.cer USERTrust.crt > zimbra_ca.pem
 fi
 
 # ========== DEPLOY NO ZIMBRA ==========
@@ -144,4 +145,3 @@ echo "Iniciando o Zimbra..."
 su - zimbra -c "zmcontrol start"
 
 echo "===== Certificado renovado com sucesso para $certs_dom - $(date) ====="
-
