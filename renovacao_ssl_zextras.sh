@@ -7,7 +7,7 @@ echo "===== Início do processo: $(date) ====="
 
 # ========== CONFIGURAÇÕES ==========
 certs_dom=$(hostname -f 2>/dev/null)
-[ -z "$certs_dom" ] && certs_dom=$(hostname)
+#[ -z "$certs_dom" ] && certs_dom=$(hostname)
 cert_path="/root/.acme.sh/$certs_dom"
 tmp_path="lets"
 tmp_dir="/tmp/$tmp_path.$certs_dom"
@@ -16,40 +16,45 @@ zerossl="no"
 letsencrypt="yes"
 
 # ========== OBTÉM IP PÚBLICO ==========
-meu_ip=$(curl -s https://api.ipify.org)
+meu_ip=$(curl -s http://checkip.amazonaws.com || hostname -I | awk '{print $1}')
 if [ -z "$meu_ip" ]; then
     echo "[ERRO] Não foi possível obter o IP público"
     exit 1
 fi
 
 # ========== OBTÉM DOMÍNIOS DO ZEXTRAS ==========
-if ! id zextras &>/dev/null; then
-    echo "[ERRO] Usuário zextras não existe. Este script é destinado a servidores com Zextras."
-    exit 1
+dominios=$(su - zextras -c "zmprov gad")
+if [ -z "$dominios" ]; then
+  echo "[ERRO] Não foi possível obter domínios via zmprov com o usuário zextras."
+  exit 1
 fi
 
-echo "[INFO] Buscando domínios no Zextras..."
-dominios=$(su - zextras -c "/opt/zextras/bin/zmprov gad" 2>/dev/null)
+echo "[INFO] Domínios gerenciados:"
+echo "$dominios"
 
-# ========== GERA dom_list COM DOMÍNIOS QUE APONTAM PARA ESTE SERVIDOR ==========
 dom_list=""
 for dominio in $dominios; do
   for sub in "" "mail." "webmail."; do
     fqdn="${sub}${dominio}"
-    ip_resolvido=$(dig +short A "$fqdn" | head -n1)
+    ip_resolvido=$(dig +short "$fqdn" | while read linha; do
+      [[ "$linha" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo "$linha" && break
+    done)
+
     if [ "$ip_resolvido" = "$meu_ip" ]; then
       dom_list+=" -d $fqdn"
       echo "[VALIDADO] $fqdn → $ip_resolvido"
     else
-      echo "[IGNORADO] $fqdn → $ip_resolvido (não aponta para $meu_ip)"
+      echo "[IGNORADO] $fqdn → ${ip_resolvido:-NÃO RESOLVEU} (não aponta para $meu_ip)"
     fi
   done
 done
 
 if [ -z "$dom_list" ]; then
-    echo "[ERRO] Nenhum domínio válido apontando para este servidor foi encontrado."
-    exit 1
+  echo "[ERRO] Nenhum domínio válido apontando para este servidor foi encontrado."
+  exit 1
 fi
+
+echo "[INFO] Domínios válidos para este servidor: $dom_list"
 
 # ========== PARANDO SERVIÇOS ==========
 echo "[INFO] Parando o Nginx..."
@@ -102,8 +107,8 @@ su - zextras -c "cd $tmp_dir && /opt/zextras/bin/zmcertmgr verifycrt comm $certs
     exit 1
 }
 
-cp "$certs_dom.key" /opt/zextras/ssl/zimbra/commercial/commercial.key -rf
-chown zextras: /opt/zextras/ssl/zimbra/commercial/commercial.key
+cp "$certs_dom.key" /opt/zextras/ssl/carbonio/commercial/commercial.key -rf
+chown zextras: /opt/zextras/ssl/carbonio/commercial/commercial.key
 
 su - zextras -c "cd $tmp_dir && /opt/zextras/bin/zmcertmgr deploycrt comm $certs_dom.cer zextras_ca.pem"
 
@@ -115,4 +120,3 @@ echo "[INFO] Reiniciando o Nginx..."
 systemctl start nginx
 
 echo "===== Certificado renovado com sucesso para $certs_dom - $(date) ====="
-
